@@ -6,6 +6,11 @@ import asyncio
 import os
 from typing import List, Optional
 
+
+# Umgebungsvariablen für Portal-Login
+PORTAL_USERNAME = os.getenv("PORTAL_USERNAME")  # Dein Makler-Login
+PORTAL_PASSWORD = os.getenv("PORTAL_PASSWORD")  # Dein Makler-Passwort
+
 app = FastAPI(title="Energy Partner Scraper API")
 
 # CORS für n8n
@@ -51,9 +56,8 @@ class ApplicationRequest(BaseModel):
     geburtsdatum: str  # Format: "DD.MM.YYYY"
     telefon: str
     email: str
-    # Optional: Bankdaten
-    iban: Optional[str] = None
-    kontoinhaber: Optional[str] = None
+    iban: str
+        kontoinhaber: str  # Pflichtfeld
     # Lieferbeginn
     lieferbeginn: str = "schnellstmöglich"
     userId: str
@@ -118,6 +122,14 @@ async def submit_application(request: ApplicationRequest):
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
+                        
+            # Zuerst einloggen als Makler
+            await page.goto("https://portal-energypartner.de/login")
+            await page.fill('input[name="username"]', PORTAL_USERNAME)
+            await page.fill('input[name="password"]', PORTAL_PASSWORD)
+            await page.click('button[type="submit"]')
+            await page.wait_for_url('**/dashboard', timeout=10000)  # Warten bis eingeloggt
+
             
             # Direkt zur Antragsseite mit Tarif-ID
             await page.goto(f"https://portal-energypartner.de/antrag?tariff={request.tariff_id}")
@@ -137,12 +149,9 @@ async def submit_application(request: ApplicationRequest):
             await page.fill('input[name="telefon"]', request.telefon)
             await page.fill('input[name="email"]', request.email)
             
-            # Bankdaten (falls vorhanden)
-            if request.iban:
+            # Bankdaten (f(Pflichtfelder)
                 await page.fill('input[name="iban"]', request.iban)
-            if request.kontoinhaber:
-                await page.fill('input[name="kontoinhaber"]', request.kontoinhaber)
-            
+    await page.fill('input[name="kontoinhaber"]', request.kontoinhaber)            
             # Lieferbeginn
             if request.lieferbeginn == "schnellstmöglich":
                 await page.check('input[name="lieferbeginn"][value="schnellstmoeglich"]')
