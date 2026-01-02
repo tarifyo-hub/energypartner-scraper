@@ -5,6 +5,7 @@ from playwright.async_api import async_playwright
 import asyncio
 import os
 from typing import List, Optional
+import re
 
 
 # Umgebungsvariablen für Portal-Login
@@ -28,6 +29,7 @@ class ScrapeRequest(BaseModel):
     personen: int = 1
     vertragsart: str = "Neukunde"
     userId: str
+        brokerId: Optional[str] = None  # Multi-Broker-Support
         ort: Optional[str] = None
     strasse: Optional[str] = None
     hausnummer: Optional[str] = None
@@ -43,6 +45,7 @@ class TariffResult(BaseModel):
     abschlussprovision: float
     sonderprovision: float
     gesamtprovision: float
+    provision: Optional[float] = 0.0  # Extrahierte Provision aus Merkmale
     laufzeit: str
     kuendigungsfrist: str
     preisgarantie: str
