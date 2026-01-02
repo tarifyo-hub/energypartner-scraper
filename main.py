@@ -231,3 +231,25 @@ async def scrape_tariffs(request: ScrapeRequest):
                 logger.info("Extracting provision data...")
                 
                 for tariff in tariffs_data:
+                                    pass  # TODO: Implement provision extraction
+
+
+        # Convert to TariffDetail objects
+        tariff_objects = [TariffDetail(**tariff) for tariff in tariffs_data]
+        
+        await browser.close()
+        
+        return ScrapeResponse(
+            success=True,
+            tariffs=tariff_objects,
+            count=len(tariff_objects)
+        )
+            
+    except Exception as e:
+        logger.error(f"Scraping error: {str(e)}")
+        return ScrapeResponse(
+            success=False,
+            tariffs=[],
+            count=0,
+            error=str(e)
+        )
