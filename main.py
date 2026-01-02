@@ -31,6 +31,11 @@ class ScrapeRequest(BaseModel):
         ort: Optional[str] = None
     strasse: Optional[str] = None
     hausnummer: Optional[str] = None
+    # Vergleichsdaten
+    voranbieter: Optional[str] = None
+    voranbieter_tarif: Optional[str] = None
+    voranbieter_grundpreis: Optional[float] = None
+    voranbieter_arbeitspreis: Optional[float] = None
 
 class TariffResult(BaseModel):
     anbieter: str
