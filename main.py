@@ -88,15 +88,14 @@ async def scrape_tariffs(request: ScrapeRequest):
             logger.info(f"Starting scrape for PLZ {request.plz}, Verbrauch {request.verbrauch}")
             
             # Zur Login-Seite
-            await page.goto("https://portal-energypartner.de/vp-buero/login/")
-            await page.wait_for_load_state('networkidle')
+            await page.goto("https://portal-energypartner.de/")
             
             # Login durchführen
             logger.info("Performing login...")
             await page.fill('#user', PORTAL_USERNAME)
             await page.fill('#pass', PORTAL_PASSWORD)
             await page.click('button[type="submit"]')
-            await page.wait_for_load_state('networkidle')
+            # Removed slow wait
             
             # Prüfen ob Login erfolgreich
             if await page.query_selector('text="Login fehlgeschlagen"'):
@@ -106,7 +105,7 @@ async def scrape_tariffs(request: ScrapeRequest):
             
             # Zur Tarifvergleichsseite
             await page.goto("https://portal-energypartner.de/energie/tarifrechner/")
-            await page.wait_for_load_state('networkidle')
+            # Removed slow wait
             
             # Warten bis egon geladen ist
             await page.wait_for_selector('#egon-embedded-ratecalc', timeout=10000)
@@ -176,7 +175,7 @@ async def scrape_tariffs(request: ScrapeRequest):
             try:
                 # Warten auf den Ergebnis-Container
                 await page.wait_for_selector('.egon-ratecalc-result-item', timeout=15000)
-                await page.wait_for_load_state('networkidle')
+                # Removed slow wait
                 
                 # Kurz warten damit alle Items geladen sind
                 await asyncio.sleep(2)
