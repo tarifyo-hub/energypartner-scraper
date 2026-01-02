@@ -34,9 +34,7 @@ class ScrapeRequest(BaseModel):
     # Vergleichsdaten
     voranbieter: Optional[str] = None
     voranbieter_tarif: Optional[str] = None
-    voranbieter_grundpreis: Optional[float] = None
-    voranbieter_arbeitspreis: Optional[float] = None
-
+    voranbieter_jahrespreis: Optional[float] = None  # Gesamtjahrespreis des Voranbieters
 class TariffResult(BaseModel):
     anbieter: str
     tarifname: str
