@@ -4,8 +4,13 @@ from pydantic import BaseModel
 from playwright.async_api import async_playwright
 import asyncio
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import re
+import logging
+
+# Logging einrichten
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Umgebungsvariablen für Portal-Login
 PORTAL_USERNAME = os.getenv("PORTAL_USERNAME")  # Dein Makler-Login
@@ -28,84 +33,109 @@ class ScrapeRequest(BaseModel):
     personen: int = 1
     vertragsart: str = "Neukunde"
     userId: str
-    brokerId: Optional[str] = None  # Multi-Broker-Support
+    brokerId: Optional[str] = None
     ort: Optional[str] = None
     strasse: Optional[str] = None
     hausnummer: Optional[str] = None
+    include_provisions: bool = True  # Provisions-Daten mit auslesen
 
-class ApplicationRequest(BaseModel):
-    plz: str
-    verbrauch: int
-    personen: int
-    tariff_id: str
-    
-    # Kundendaten
-    anrede: str  # "Herr" oder "Frau"
-    vorname: str
-    nachname: str
-    strasse: str
-    hausnummer: str
-    wohnort: str
-    geburtsdatum: str  # Format: "DD.MM.YYYY"
-    telefon: str
-    email: str
-    iban: str  # Pflichtfeld
-    kontoinhaber: str  # Pflichtfeld
-    
-    # Lieferbeginn
-    lieferbeginn: str = "schnellstmöglich"
-    userId: str
+class TariffDetail(BaseModel):
+    anbieter: str
+    tarif: str
+    preis_monat: Optional[str] = None
+    preis_jahr: Optional[str] = None
+    grundpreis: Optional[str] = None
+    arbeitspreis: Optional[str] = None
+    provision: Optional[str] = None  # Provisions-Wert
+    provision_details: Optional[Dict[str, Any]] = None
+    tariff_id: Optional[str] = None
 
-class ApplicationResult(BaseModel):
+class ScrapeResponse(BaseModel):
     success: bool
-    antragsnummer: Optional[str] = None
-    message: str
-    details: Optional[dict] = None
+    tariffs: List[TariffDetail]
+    count: int
+    error: Optional[str] = None
 
 @app.get("/")
 async def root():
-    return {"status": "online", "service": "Energy Partner Scraper API"}
+    return {
+        "status": "online", 
+        "service": "Energy Partner Scraper API",
+        "version": "2.0"
+    }
 
-@app.post("/scrape")
+@app.post("/scrape", response_model=ScrapeResponse)
 async def scrape_tariffs(request: ScrapeRequest):
-    """Scrape Tarifvergleich von portal-energypartner.de"""
+    """Scrape Tarifvergleich von portal-energypartner.de inkl. Provisions-Daten"""
+    
+    if not PORTAL_USERNAME or not PORTAL_PASSWORD:
+        raise HTTPException(
+            status_code=500,
+            detail="Portal credentials not configured. Set PORTAL_USERNAME and PORTAL_PASSWORD env vars."
+        )
+    
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox']
+            )
+            context = await browser.new_context(
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = await context.new_page()
+            
+            logger.info(f"Starting scrape for PLZ {request.plz}, Verbrauch {request.verbrauch}")
+            
+            # Zur Login-Seite
+            await page.goto("https://portal-energypartner.de/vp-buero/login/")
+            await page.wait_for_load_state('networkidle')
+            
+            # Login durchführen
+            logger.info("Performing login...")
+            await page.fill('input[name="user"]', PORTAL_USERNAME)
+            await page.fill('input[name="pass"]', PORTAL_PASSWORD)
+            await page.click('button[type="submit"]')
+            await page.wait_for_load_state('networkidle')
+            
+            # Prüfen ob Login erfolgreich
+            if await page.query_selector('text="Login fehlgeschlagen"'):
+                raise Exception("Login failed - check credentials")
+            
+            logger.info("Login successful, navigating to tariff calculator...")
             
             # Zur Tarifvergleichsseite
             await page.goto("https://portal-energypartner.de/energie/tarifrechner/")
+            await page.wait_for_load_state('networkidle')
             
-            # Formular ausfüllen - character by character typing
+            # Warten bis egon geladen ist
+            await page.wait_for_selector('#egon-embedded-ratecalc', timeout=10000)
             
-            # PLZ-Feld - leer machen und dann tippen
+            logger.info("Filling form...")
+            
+            # Formular ausfüllen
+            # PLZ
             await page.click('#egon-embedded-ratecalc-form-field-zip')
             await page.fill('#egon-embedded-ratecalc-form-field-zip', '')
             await page.type('#egon-embedded-ratecalc-form-field-zip', request.plz, delay=50)
-            
-            # Auf Ort-Feld klicken um blur-Event zu triggern
             await page.click('#egon-embedded-ratecalc-form-field-city')
             
-            # Warten bis Ort geladen ist (max 5 Sekunden)
+            # Warten bis Ort geladen
             await page.wait_for_function(
-                f"""() => {{
+                """() => {
                     const citySelect = document.querySelector('#egon-embedded-ratecalc-form-field-city');
                     return citySelect && citySelect.options.length > 1;
-                }}""",
+                }""",
                 timeout=5000
             )
             
-            # Ort auswählen (triggert Straßen-AJAX)
-            if hasattr(request, 'ort') and request.ort:
+            # Ort auswählen
+            if request.ort:
                 await page.select_option('#egon-embedded-ratecalc-form-field-city', label=request.ort)
             else:
-                # Ersten verfügbaren Ort auswählen
-                city_options = await page.query_selector_all('#egon-embedded-ratecalc-form-field-city option')
-                if len(city_options) > 1:
-                    await page.select_option('#egon-embedded-ratecalc-form-field-city', index=1)
+                await page.select_option('#egon-embedded-ratecalc-form-field-city', index=1)
             
-            # Warten bis Straßen geladen sind
+            # Warten bis Straßen geladen
             await page.wait_for_function(
                 """() => {
                     const streetSelect = document.querySelector('#egon-embedded-ratecalc-form-field-street');
@@ -115,24 +145,17 @@ async def scrape_tariffs(request: ScrapeRequest):
             )
             
             # Straße auswählen
-            if hasattr(request, 'strasse') and request.strasse:
+            if request.strasse:
                 await page.select_option('#egon-embedded-ratecalc-form-field-street', label=request.strasse)
             else:
-                # Erste verfügbare Straße auswählen
-                street_options = await page.query_selector_all('#egon-embedded-ratecalc-form-field-street option')
-                if len(street_options) > 1:
-                    await page.select_option('#egon-embedded-ratecalc-form-field-street', index=1)
+                await page.select_option('#egon-embedded-ratecalc-form-field-street', index=1)
             
-            # Hausnummer eingeben
-            if hasattr(request, 'hausnummer') and request.hausnummer:
-                await page.fill('#egon-embedded-ratecalc-form-field-street_number', request.hausnummer)
-            else:
-                await page.fill('#egon-embedded-ratecalc-form-field-street_number', '1')
-            
-            # Fokus verlieren, um Netzbetreiber-AJAX zu triggern
+            # Hausnummer
+            hausnr = request.hausnummer if request.hausnummer else '1'
+            await page.fill('#egon-embedded-ratecalc-form-field-street_number', hausnr)
             await page.click('body')
             
-            # Warten bis Netzbetreiber geladen ist
+            # Warten bis Netzbetreiber geladen
             await page.wait_for_function(
                 """() => {
                     const netzSelect = document.querySelector('#egon-embedded-ratecalc-form-field-netz_id');
@@ -141,73 +164,115 @@ async def scrape_tariffs(request: ScrapeRequest):
                 timeout=5000
             )
             
-            # Verbrauch eingeben
+            # Verbrauch
             await page.fill('#egon-embedded-ratecalc-form-field-consum', str(request.verbrauch))
             
-            # Tarife berechnen
+            logger.info("Submitting form...")
+            
+            # Formular absenden
             await page.click('button:has-text("jetzt Tarife berechnen")')
             
-            # Warten bis Ergebnisse geladen sind
-            await page.wait_for_selector('.tariff-result', timeout=10000)
+            # Warten bis Ergebnisse geladen - egon nutzt dynamisches Laden
+            try:
+                # Warten auf den Ergebnis-Container
+                await page.wait_for_selector('.egon-ratecalc-result-item', timeout=15000)
+                await page.wait_for_load_state('networkidle')
+                
+                # Kurz warten damit alle Items geladen sind
+                await asyncio.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"Error waiting for results: {e}")
+                # Screenshot für Debugging
+                await page.screenshot(path='/tmp/error_screenshot.png')
+                raise Exception(f"No tariff results found. Error: {str(e)}")
             
-            # Tarife extrahieren
-            tariffs = await page.evaluate("""
+            logger.info("Extracting tariff data...")
+            
+            # Tarife extrahieren - angepasst an egon-Struktur
+            tariffs_data = await page.evaluate("""
                 () => {
                     const results = [];
-                    document.querySelectorAll('.tariff-result').forEach((el) => {
-                        const tariff = {
-                            anbieter: el.querySelector('.provider-name')?.textContent.trim() || '',
-                            tarif: el.querySelector('.tariff-name')?.textContent.trim() || '',
-                            preis: el.querySelector('.price')?.textContent.trim() || '',
-                            details: el.querySelector('.details')?.textContent.trim() || ''
-                        };
-                        results.push(tariff);
+                    const items = document.querySelectorAll('.egon-ratecalc-result-item');
+                    
+                    items.forEach((item, index) => {
+                        try {
+                            const tariff = {
+                                anbieter: item.querySelector('.egon-provider-name')?.textContent?.trim() || 
+                                         item.querySelector('[data-field="provider"]')?.textContent?.trim() || '',
+                                tarif: item.querySelector('.egon-tariff-name')?.textContent?.trim() ||
+                                      item.querySelector('[data-field="tariff"]')?.textContent?.trim() || '',
+                                preis_monat: item.querySelector('.egon-price-month')?.textContent?.trim() ||
+                                           item.querySelector('[data-field="price_month"]')?.textContent?.trim() || null,
+                                preis_jahr: item.querySelector('.egon-price-year')?.textContent?.trim() ||
+                                          item.querySelector('[data-field="price_year"]')?.textContent?.trim() || null,
+                                grundpreis: item.querySelector('.egon-base-price')?.textContent?.trim() ||
+                                          item.querySelector('[data-field="base_price"]')?.textContent?.trim() || null,
+                                arbeitspreis: item.querySelector('.egon-work-price')?.textContent?.trim() ||
+                                            item.querySelector('[data-field="work_price"]')?.textContent?.trim() || null,
+                                tariff_id: item.getAttribute('data-tariff-id') || 
+                                         item.getAttribute('data-id') ||
+                                         `tariff_${index}`
+                            };
+                            results.push(tariff);
+                        } catch (err) {
+                            console.error('Error parsing tariff item:', err);
+                        }
                     });
+                    
                     return results;
                 }
             """)
             
+            logger.info(f"Found {len(tariffs_data)} tariffs")
+            
+            # Provisions-Daten auslesen wenn gewünscht
+            if request.include_provisions and len(tariffs_data) > 0:
+                logger.info("Extracting provision data...")
+                
+                for tariff in tariffs_data:
+                    try:
+                        # Provision-Tab/Button suchen und klicken
+                        provision_selector = f'[data-tariff-id="{tariff["tariff_id"]}"'] .egon-provision-btn'
+                        provision_element = await page.query_selector(provision_selector)
+                        
+                        if provision_element:
+                            await provision_element.click()
+                            await asyncio.sleep(0.5)  # Kurz warten bis Provision angezeigt wird
+                            
+                            # Provision-Wert auslesen
+                            provision_value = await page.evaluate(f"""
+                                () => {{
+                                    const elem = document.querySelector('[data-tariff-id="{tariff['tariff_id']}"] .egon-provision-value');
+                                    return elem ? elem.textContent.trim() : null;
+                                }}
+                            """)
+                            
+                            tariff['provision'] = provision_value
+                            logger.info(f"Provision for {tariff['tarif']}: {provision_value}")
+                            
+                    except Exception as e:
+                        logger.warning(f"Could not extract provision for tariff {tariff['tarif']}: {e}")
+                        tariff['provision'] = None
+            
             await browser.close()
             
-            return {
-                "success": True,
-                "tariffs": tariffs,
-                "count": len(tariffs)
-            }
+            # Pydantic models erstellen
+            tariffs = [TariffDetail(**t) for t in tariffs_data]
             
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "tariffs": []
-        }
-
-@app.post("/apply")
-async def apply_tariff(request: ApplicationRequest):
-    """Tarif-Antrag ausfüllen und absenden"""
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            
-            # TODO: Hier die Logik für den Antragsablauf implementieren
-            # 1. Zur Tarifseite navigieren
-            # 2. Antrag auswählen
-            # 3. Kundendaten eingeben (mit IBAN und kontoinhaber als Pflichtfelder)
-            # 4. Absenden und Antragsnummer extrahieren
-            
-            await browser.close()
-            
-            return ApplicationResult(
+            return ScrapeResponse(
                 success=True,
-                antragsnummer="TEST-12345",
-                message="Antrag erfolgreich erstellt"
+                tariffs=tariffs,
+                count=len(tariffs)
             )
-            
+    
     except Exception as e:
-        return ApplicationResult(
+        logger.error(f"Scraping error: {str(e)}")
+        return ScrapeResponse(
             success=False,
-            message=f"Fehler beim Erstellen des Antrags: {str(e)}"
+            tariffs=[],
+            count=0,
+            error=str(e)
         )
 
 if __name__ == "__main__":
