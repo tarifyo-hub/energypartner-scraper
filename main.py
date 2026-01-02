@@ -28,6 +28,9 @@ class ScrapeRequest(BaseModel):
     personen: int = 1
     vertragsart: str = "Neukunde"
     userId: str
+        ort: Optional[str] = None
+    strasse: Optional[str] = None
+    hausnummer: Optional[str] = None
 
 class TariffResult(BaseModel):
     anbieter: str
@@ -84,9 +87,55 @@ async def scrape_tariffs(request: ScrapeRequest):
             await page.goto("https://portal-energypartner.de/tarifvergleich")
             
             # Formular ausfüllen
-            await page.fill('input[name="plz"]', request.plz)
-            await page.fill('input[name="verbrauch"]', str(request.verbrauch))
-            await page.select_option('select[name="personen"]', str(request.personen))
+                    
+        # PLZ-Feld mit blur-Event triggern
+        await page.click('#egon-embedded-ratecalc-form-field-zip')
+        await page.fill('#egon-embedded-ratecalc-form-field-zip', '')
+        await page.type('#egon-embedded-ratecalc-form-field-zip', request.plz)
+        # Fokus auf anderes Feld setzen, um blur-Event zu triggern
+        await page.click('#egon-embedded-ratecalc-form-field-city')
+        # Warten bis Ort geladen ist (max 5 Sekunden)
+        await page.wait_for_function(
+            f"""() => {{
+                const citySelect = document.querySelector('#egon-embedded-ratecalc-form-field-city');
+                return citySelect && citySelect.options.length > 1;
+            }}""",
+            timeout=5000
+        )
+        
+        # Ort auswählen (triggert Straßen-AJAX)
+        await page.select_option('#egon-embedded-ratecalc-form-field-city', label=request.ort if hasattr(request, 'ort') else '')
+        
+        # Warten bis Straßen geladen sind
+        await page.wait_for_function(
+            """() => {
+                const streetSelect = document.querySelector('#egon-embedded-ratecalc-form-field-street');
+                return streetSelect && streetSelect.options.length > 1;
+            }""",
+            timeout=5000
+        )
+        
+        # Straße auswählen
+        if hasattr(request, 'strasse') and request.strasse:
+            await page.select_option('#egon-embedded-ratecalc-form-field-street', label=request.strasse)
+        
+        # Hausnummer eingeben
+        if hasattr(request, 'hausnummer') and request.hausnummer:
+            await page.fill('#egon-embedded-ratecalc-form-field-street_number', request.hausnummer)
+            # Fokus verlieren, um Netzbetreiber-AJAX zu triggern
+            await page.click('body')
+            # Warten bis Netzbetreiber geladen ist
+            await page.wait_for_function(
+                """() => {
+                    const netzSelect = document.querySelector('#egon-embedded-ratecalc-form-field-netz_id');
+                    return netzSelect && netzSelect.value !== 'Kein Netzbetreiber' && netzSelect.value !== '';
+                }""",
+                timeout=5000
+            )
+                    
+        # Verbrauch eingeben
+        await page.fill('#egon-embedded-ratecalc-form-field-consum', str(request.verbrauch))
+        
             
             # Suche starten
             await page.click('button[type="submit"]')
