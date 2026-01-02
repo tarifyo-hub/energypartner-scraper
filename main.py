@@ -94,7 +94,7 @@ async def scrape_tariffs(request: ScrapeRequest):
             # Login durchführen
             logger.info("Performing login...")
             await page.fill('input[name="user"]', PORTAL_USERNAME)
-            await page.fill('input[name="pass"]', PORTAL_PASSWORD)
+            await page.fill('#pass', PORTAL_PASSWORD)
             await page.click('button[type="submit"]')
             await page.wait_for_load_state('networkidle')
             
