@@ -233,11 +233,11 @@ async def scrape_tariffs(request: ScrapeRequest):
                 for tariff in tariffs_data:
                     try:
                         # Provision-Tab/Button suchen und klicken
-                        provision_selector = f'[data-tariff-id="{tariff["tariff_id"]}"'] .egon-provision-btn'
+                        provision_selector = f'[data-tariff-id="{tariff["tariff_id"]}"] .egon-provision-bt
                         provision_element = await page.query_selector(provision_selector)
                         
                         if provision_element:
-                            await provision_element.click()
+                            await provision_element.click()]'
                             await asyncio.sleep(0.5)  # Kurz warten bis Provision angezeigt wird
                             
                             # Provision-Wert auslesen
