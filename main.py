@@ -233,4 +233,4 @@ async def scrape_tariffs(request: ScrapeRequest):
                 for tariff in tariffs_data:
                     try:
                         # Provision-Tab/Button suchen und klicken
-                                                        provision_selector = f"[data-tariff-id=\"{tariff['tariff_id']}\"] .egon-provision-btn"
+                                                                                    provision_selector = f"[data-tariff-id=\"{tariff['tariff_id']}\"] .egon-provision-btn"
